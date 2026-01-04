@@ -25,7 +25,7 @@ if not groq_api_key:
 # Set Groq API key
 os.environ["GROQ_API_KEY"] = groq_api_key
 
-st.set_page_config(page_title="RAG Q&A System", layout="wide")
+st.set_page_config(page_title="RAG Q&A System", layout="wide", initial_sidebar_state="expanded")
 st.title("📚 RAG Q&A System")
 st.write("Upload a document and ask questions about its content!")
 
@@ -36,60 +36,77 @@ if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
 if "document_name" not in st.session_state:
     st.session_state.document_name = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+@st.cache_resource
+def load_embeddings():
+    """Cache embeddings to avoid reloading"""
+    return HuggingFaceEmbeddings(model="all-MiniLM-L6-v2")
 
 def create_rag_pipeline(file_path: str):
     """Create a RAG pipeline with LangChain and Groq AI"""
     
-    # 1. Load the document
-    loader = TextLoader(file_path)
-    documents = loader.load()
-    
-    # 2. Split text into chunks
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        length_function=len,
-    )
-    chunks = text_splitter.split_documents(documents)
-    
-    # 3. Create embeddings using HuggingFace (free, open-source)
-    embeddings = HuggingFaceEmbeddings(model="all-MiniLM-L6-v2")
-    vector_store = FAISS.from_documents(chunks, embeddings)
-    
-    # 4. Create the Groq LLM
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        temperature=0.7,
-        max_tokens=1024,
-    )
-    
-    # 5. Define custom prompt
-    system_prompt = """Use the following pieces of context to answer the question. 
+    try:
+        # 1. Load the document
+        loader = TextLoader(file_path)
+        documents = loader.load()
+        
+        if not documents:
+            raise ValueError("Document is empty!")
+        
+        # 2. Split text into chunks
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len,
+        )
+        chunks = text_splitter.split_documents(documents)
+        
+        if not chunks:
+            raise ValueError("No chunks created from document!")
+        
+        # 3. Create embeddings using HuggingFace (free, open-source)
+        embeddings = load_embeddings()
+        vector_store = FAISS.from_documents(chunks, embeddings)
+        
+        # 4. Create the Groq LLM
+        llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            temperature=0.7,
+            max_tokens=1024,
+        )
+        
+        # 5. Define custom prompt
+        system_prompt = """Use the following pieces of context to answer the question. 
 If you don't know the answer, just say that you don't know, don't try to make up an answer.
 
 Context:
 {context}"""
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", system_prompt),
+            ("human", "{input}"),
+        ])
+        
+        # 6. Create RAG chain using LCEL (LangChain Expression Language)
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+        
+        qa_chain = (
+            {
+                "context": vector_store.as_retriever(search_kwargs={"k": 3}) | format_docs,
+                "input": RunnablePassthrough(),
+            }
+            | prompt
+            | llm
+            | StrOutputParser()
+        )
+        
+        return qa_chain, vector_store
     
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", "{input}"),
-    ])
-    
-    # 6. Create RAG chain using LCEL (LangChain Expression Language)
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
-    
-    qa_chain = (
-        {
-            "context": vector_store.as_retriever(search_kwargs={"k": 3}) | format_docs,
-            "input": RunnablePassthrough(),
-        }
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    
-    return qa_chain, vector_store
+    except Exception as e:
+        raise Exception(f"Error creating RAG pipeline: {str(e)}")
 
 # Sidebar for file upload
 st.sidebar.header("📄 Upload Document")
@@ -102,36 +119,57 @@ if uploaded_file is not None:
         tmp_file_path = tmp_file.name
     
     # Create RAG pipeline
-    with st.spinner("Processing document..."):
+    with st.spinner("📖 Processing document... This may take a moment"):
         try:
             qa_chain, vector_store = create_rag_pipeline(tmp_file_path)
             st.session_state.qa_chain = qa_chain
             st.session_state.vector_store = vector_store
             st.session_state.document_name = uploaded_file.name
+            st.session_state.chat_history = []  # Reset chat history
             st.sidebar.success(f"✅ '{uploaded_file.name}' processed successfully!")
         except Exception as e:
             st.sidebar.error(f"❌ Error processing document: {str(e)}")
         finally:
-            os.unlink(tmp_file_path)
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
 
 # Main content area
 if st.session_state.qa_chain is not None:
-    st.success(f"✅ Document loaded: '{st.session_state.document_name}' | You can now ask questions.")
+    st.success(f"✅ Document loaded: **{st.session_state.document_name}**")
+    
+    # Display chat history
+    if st.session_state.chat_history:
+        st.header("💬 Chat History")
+        for i, (q, a) in enumerate(st.session_state.chat_history):
+            with st.container():
+                st.write(f"**Q{i+1}:** {q}")
+                st.write(f"**A{i+1}:** {a}")
+                st.divider()
     
     # Question input
     st.header("❓ Ask a Question")
     question = st.text_area("Enter your question:", height=100, placeholder="What would you like to know about the document?")
     
-    col1, col2 = st.columns([1, 4])
+    col1, col2, col3 = st.columns([1, 1, 2])
     
     with col1:
         submit_button = st.button("🔍 Get Answer", use_container_width=True)
     
+    with col2:
+        clear_button = st.button("🗑️ Clear Chat", use_container_width=True)
+    
+    if clear_button:
+        st.session_state.chat_history = []
+        st.rerun()
+    
     if submit_button and question.strip():
-        with st.spinner("Finding answer..."):
+        with st.spinner("🤔 Finding answer..."):
             try:
                 # Get answer from chain
                 answer = st.session_state.qa_chain.invoke(question)
+                
+                # Add to chat history
+                st.session_state.chat_history.append((question, answer))
                 
                 # Get source documents
                 retriever = st.session_state.vector_store.as_retriever(search_kwargs={"k": 3})
@@ -144,12 +182,22 @@ if st.session_state.qa_chain is not None:
                 # Display source documents
                 st.header("📚 Source Documents")
                 for i, doc in enumerate(docs, 1):
-                    with st.expander(f"Source {i}"):
+                    with st.expander(f"📄 Source {i}"):
                         st.write(doc.page_content)
                         
             except Exception as e:
                 st.error(f"❌ Error getting answer: {str(e)}")
     elif submit_button:
-        st.warning("Please enter a question.")
+        st.warning("⚠️ Please enter a question.")
 else:
-    st.info("👈 Please upload a document first to get started!")
+    st.info("👈 Please upload a document from the sidebar to get started!")
+    
+    # Display some instructions
+    with st.expander("📖 How to use?"):
+        st.write("""
+        1. **Upload a text file** (.txt) from the sidebar
+        2. Wait for the document to be processed
+        3. **Ask questions** about the document content
+        4. Get **instant answers** powered by Groq AI
+        5. View **source documents** that were used to answer your question
+        """)
