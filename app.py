@@ -1,6 +1,7 @@
 import streamlit as st
 import tempfile
 import os
+from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -10,8 +11,19 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 
+# Load environment variables from .env file
+load_dotenv()
+
+# Get Groq API key from environment variable
+groq_api_key = os.getenv("GROQ_API_KEY")
+
+# Validate API key exists
+if not groq_api_key:
+    st.error("❌ GROQ_API_KEY not found! Please set it in your environment variables or .env file")
+    st.stop()
+
 # Set Groq API key
-os.environ["GROQ_API_KEY"] = "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"
+os.environ["GROQ_API_KEY"] = groq_api_key
 
 st.set_page_config(page_title="RAG Q&A System", layout="wide")
 st.title("📚 RAG Q&A System")
@@ -22,6 +34,8 @@ if "vector_store" not in st.session_state:
     st.session_state.vector_store = None
 if "qa_chain" not in st.session_state:
     st.session_state.qa_chain = None
+if "document_name" not in st.session_state:
+    st.session_state.document_name = None
 
 def create_rag_pipeline(file_path: str):
     """Create a RAG pipeline with LangChain and Groq AI"""
@@ -93,7 +107,8 @@ if uploaded_file is not None:
             qa_chain, vector_store = create_rag_pipeline(tmp_file_path)
             st.session_state.qa_chain = qa_chain
             st.session_state.vector_store = vector_store
-            st.sidebar.success("✅ Document processed successfully!")
+            st.session_state.document_name = uploaded_file.name
+            st.sidebar.success(f"✅ '{uploaded_file.name}' processed successfully!")
         except Exception as e:
             st.sidebar.error(f"❌ Error processing document: {str(e)}")
         finally:
@@ -101,7 +116,7 @@ if uploaded_file is not None:
 
 # Main content area
 if st.session_state.qa_chain is not None:
-    st.success("✅ Document loaded! You can now ask questions.")
+    st.success(f"✅ Document loaded: '{st.session_state.document_name}' | You can now ask questions.")
     
     # Question input
     st.header("❓ Ask a Question")
