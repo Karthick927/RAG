@@ -1,5 +1,12 @@
-streamlit==1.28.1
-langchain==0.1.9
-langchain-groq==0.1.2
-langchain-core>=0.1.42
-python-dotenv==1.0.0
+streamlit
+python-dotenv
+langchain-groq
+langchain-core
+langchain-community
+langchain-text-splitters
+chromadb
+sentence-transformers
+requests
+Pillow
+groq
+edge-tts
